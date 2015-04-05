@@ -5,8 +5,6 @@ PKGS := $(PKG) $(SUBPKGS)
 GODEP := $(GOPATH)/bin/godep
 GOLINT := $(GOPATH)/bin/golint
 
-GO_FILES = $(shell find . -type f -name '*.go')
-
 .PHONY: test $(PKGS) build clean
 
 test: $(PKGS)
@@ -18,13 +16,15 @@ $(GOLINT):
 	go get github.com/golang/lint/golint
 
 
+# any time a go file changes godeps might need to be updated
+GO_FILES = $(shell find . -type f -name '*.go')
 Godeps: Godeps/Godeps.json
 Godeps/Godeps.json: $(GODEP) $(GO_FILES)
 	mkdir -p Godeps
 	go get $(PKGS)
 	$(GODEP) save -r
 
-build:
+build: Godeps
 	go build $(PKG)
 
 $(PKGS): $(GOLINT)

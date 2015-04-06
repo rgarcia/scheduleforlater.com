@@ -8,8 +8,12 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"net/url"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -48,6 +52,7 @@ type MailgunRoutePayload struct {
 	Signature         string `schema:"signature"`          // string with hexadecimal digits generate by HMAC algorithm (see securing webhooks).
 	MessageHeaders    string `schema:"message-headers"`    // list of all MIME headers dumped to a json string (order of headers preserved).
 	ContentIDMap      string `schema:"content-id-map"`     // JSON-encoded dictionary which maps Content-ID (CID) of each attachment to the corresponding attachment-x parameter. This allows you to map posted attachments to tags like <img src='cid'> in the message body.
+	MessageID         string `schema:"Message-Id"`
 }
 
 // User of the program has an email, calendar, and some preferences.
@@ -72,10 +77,27 @@ type Verification struct {
 	ID         bson.ObjectId `bson:"_id"`
 	Email      string        `bson:"email"`
 	Subject    string        `bson:"subject"`
+	MessageID  string        `bson:"message_id"`
 	Directions string        `bson:"directions"`
 	Key        string        `bson:"key"`
 	Timestamp  time.Time     `bson:"timestamp"`
 }
+
+type interval struct {
+	Start time.Time
+	End   time.Time
+}
+
+type slotRank struct {
+	Slot  interval
+	Score float64
+}
+
+type byRank []slotRank
+
+func (r byRank) Len() int           { return len(r) }
+func (r byRank) Swap(i, j int)      { r[i], r[j] = r[j], r[i] }
+func (r byRank) Less(i, j int) bool { return r[i].Score < r[j].Score }
 
 func main() {
 	var port string
@@ -96,6 +118,12 @@ func main() {
 	var domain string
 	if domain = os.Getenv("MAILGUN_DOMAIN"); domain == "" {
 		log.Fatal("must set MAILGUN_DOMAIN")
+	}
+
+	// sendandreceiveaddress is where users send emails and where we send emails from
+	var sendandreceiveaddress string
+	if sendandreceiveaddress = os.Getenv("SEND_AND_RECEIVE_ADDRESS"); sendandreceiveaddress == "" {
+		log.Fatal("must set SEND_AND_RECEIVE_ADDRESS")
 	}
 
 	// host is where the server is running. It is used to create hyperlinks and for the cookie domain.
@@ -150,6 +178,202 @@ func main() {
 	// required for some stuff. don't 100% understand
 	ctx := netcontext.Background()
 
+	scheduleForLater := func(from string, user User, subject string, directions string, messageID string) {
+		sendEmail := func(text string) {
+			if id, mes, err := mg.Send(mailgun.NewMessage(
+				from, // from
+				fmt.Sprintf("Re: %s", subject),
+				text,
+				user.Email,
+			)); err != nil {
+				log.Printf("error: unable to send user email: %s", err)
+			} else {
+				log.Printf("sent email %s %s", mes, id)
+			}
+		}
+
+		// parse directions into number of minutes and interval within which to schedule
+		var timeRangeForMtg interval
+		var mtgDuration time.Duration
+		func() {
+			usage := "[n] minutes next [n] [hours|days]"
+			directionparts := strings.Split(directions, " ")
+			if len(directionparts) != 5 || directionparts[1] != "minutes" || directionparts[2] != "next" || !(directionparts[4] == "hours" || directionparts[4] == "days") {
+				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+				return
+			}
+			nminutes, err := strconv.Atoi(directionparts[0])
+			if err != nil {
+				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+				return
+			}
+			mtgDuration = time.Duration(nminutes) * time.Minute
+			nduration, err := strconv.Atoi(directionparts[3])
+			if err != nil {
+				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+				return
+			}
+			timeRangeForMtg.Start = time.Now()
+			if directionparts[4] == "hours" {
+				timeRangeForMtg.End = timeRangeForMtg.Start.Add(time.Duration(nduration) * time.Hour)
+			} else if directionparts[4] == "days" {
+				timeRangeForMtg.End = timeRangeForMtg.Start.Add(time.Duration(nduration) * 24 * time.Hour)
+			}
+			log.Printf("making a meeting sometime between %s and %s", timeRangeForMtg.Start, timeRangeForMtg.End)
+		}()
+
+		// enumerate all potential meeting slots starting on 15 minute marks
+		mark := 15 * time.Minute
+		var mtgSlots []interval
+		func() {
+			mtgSlotStart := timeRangeForMtg.Start.Add(mark).Round(mark) // round up to next starting time
+			for {
+				mtgSlotEnd := mtgSlotStart.Add(mtgDuration)
+				if mtgSlotEnd.After(timeRangeForMtg.End) {
+					break
+				}
+				mtgSlots = append(mtgSlots, interval{Start: mtgSlotStart, End: mtgSlotEnd})
+				log.Print(mtgSlotStart, mtgSlotEnd)
+				mtgSlotStart = mtgSlotStart.Add(mark)
+			}
+		}()
+
+		// query for times when we're busy in the range
+		var busySlots []interval
+		client := oauth2config.Client(ctx, &oauth2.Token{
+			AccessToken:  user.GCal.AccessToken,
+			RefreshToken: user.GCal.RefreshToken,
+			Expiry:       time.Now().Add(-time.Hour), // TODO: store expiry so that we don't have to assume always expired
+		})
+		svc, err := calendar.New(client)
+		if err != nil {
+			log.Printf("error initiating calendar service: %s", err)
+			sendEmail("Error initiating calendar service. Please try again.")
+			return
+		}
+		calapitimefmt := "2006-01-02T15:04:05-0700"
+		func() {
+			freebusy, err := calendar.NewFreebusyService(svc).Query(&calendar.FreeBusyRequest{
+				Items: []*calendar.FreeBusyRequestItem{
+					&calendar.FreeBusyRequestItem{Id: user.GCal.Email},
+				},
+				TimeMin: timeRangeForMtg.Start.Format(calapitimefmt),
+				TimeMax: timeRangeForMtg.End.Format(calapitimefmt),
+			}).Do()
+			if err != nil {
+				log.Printf("error getting free/busy from calendar: %s", err)
+				sendEmail("Error getting free/busy from calendar. Please try again.")
+				return
+			}
+			fbcalendar, ok := freebusy.Calendars[user.GCal.Email]
+			if !ok {
+				log.Printf("error: incorrectly assumed user had calendar named after email.")
+				sendEmail(fmt.Sprintf("Oh no! The service currently only works if you have a calendar named '%s' that we can query for open slots and add events to.", user.GCal.Email))
+				return
+			}
+			if len(fbcalendar.Errors) != 0 {
+				for _, err := range fbcalendar.Errors {
+					log.Printf("error: domain: %s reason: %s", err.Domain, err.Reason)
+				}
+				sendEmail("We ran into a problem retrieving free/busy data. Please try sending again.")
+				return
+			}
+			log.Printf("free busy %#v", freebusy)
+			for _, busy := range fbcalendar.Busy {
+				var i interval
+				i.Start, _ = time.Parse("2006-01-02T15:04:05Z", busy.Start)
+				i.End, _ = time.Parse("2006-01-02T15:04:05Z", busy.End)
+				busySlots = append(busySlots, i)
+				log.Printf("busy from %s to %s", i.Start, i.End)
+			}
+		}()
+
+		// rank feasible blocks of time based on the following criteria:
+		// - not within user's preferences => -1000 points. In the future might be less of a penalty if close to preferences e.g. ok to have a mtg go a little bit past EOD
+		// - distance to midpoint of [timeRangeForMtg.Start, timeRangeForMtg.End], where low distance == good
+		//   i.e. if it's right at the midpoint, 1 point
+		//        if it's right at the start or end, 0 points
+		// - contiguous with other meetings. If a slot's end time matches with the start of another meeting or a slot's start time matches with the end of another meeting, +1 pt.
+		// ... future other criteria
+		var slotRanks []slotRank
+		userPreferencesScore := func(slot interval) float64 {
+			// if this slot falls outside of user's preference for start/end time of the day, -1000 points
+			// this rests on the assumption that we collect a single timezone when getting user preferences, and that the start and end time are sequential
+			// this lets us put their preferences on a 24 hour range so that we can assume that the hours on user's preferred start/end are strictly increasing
+			userPrefStart := user.Prefs.StartTime.In(slot.Start.Location())
+			userPrefEnd := user.Prefs.EndTime.In(slot.Start.Location())
+			slotStartHour := slot.Start.Hour()
+			slotEndHour := slot.End.Hour()
+			if slotStartHour > slotEndHour {
+				slotEndHour += 24
+			}
+			if (slotStartHour < userPrefStart.Hour()) ||
+				(slotStartHour == userPrefStart.Hour() && slot.Start.Minute() < userPrefStart.Minute()) ||
+				(slotEndHour > userPrefEnd.Hour()) ||
+				(slotEndHour == userPrefEnd.Hour() && slot.End.Minute() > userPrefEnd.Minute()) {
+				return -1000.0
+			} else {
+				return 0.0
+			}
+		}
+		midpointScore := func(slot interval) float64 {
+			// theory: if you say "next 48 hours" your ideal time is 24 hours from now
+			// thus, give 0 points to things furthest from the midpoint, and 1 point to things closest
+			midpoint := func(i interval) time.Time {
+				return i.Start.Add(i.End.Sub(i.Start) / 2)
+			}
+			midpointOfRange := midpoint(timeRangeForMtg)
+			rangeLength := float64(timeRangeForMtg.End.Sub(timeRangeForMtg.Start))
+			midpointOfSlot := midpoint(slot)
+			return 1.0 - 2*math.Abs(float64(midpointOfSlot.Sub(midpointOfRange)))/rangeLength
+		}
+		contiguousScore := func(slot interval) float64 {
+			for _, busySlot := range busySlots {
+				if slot.Start.Equal(busySlot.End) || slot.End.Equal(busySlot.Start) {
+					return 1.0
+				}
+			}
+			return 0.0
+		}
+		for _, mtgSlot := range mtgSlots {
+			score := userPreferencesScore(mtgSlot) + midpointScore(mtgSlot) + contiguousScore(mtgSlot)
+			slotRanks = append(slotRanks, slotRank{Slot: mtgSlot, Score: score})
+		}
+		sort.Sort(sort.Reverse(byRank(slotRanks)))
+		for _, slotRank := range slotRanks {
+			log.Printf("slot: %s %s score: %f", slotRank.Slot.Start, slotRank.Slot.End, slotRank.Score)
+		}
+
+		// schedule the mtg
+		mtgStart := slotRanks[0].Slot.Start
+		mtgEnd := slotRanks[0].Slot.End
+		event, err := calendar.NewEventsService(svc).Insert(user.GCal.Email, &calendar.Event{
+			Attendees: []*calendar.EventAttendee{
+				&calendar.EventAttendee{Email: user.GCal.Email},
+			},
+			Description: fmt.Sprintf("https://mail.google.com/mail/?authuser=%s#search/%s",
+				user.GCal.Email,
+				url.QueryEscape(fmt.Sprintf("rfc822msgid:%s", messageID))), // link to email
+			Start:   &calendar.EventDateTime{DateTime: mtgStart.Format(calapitimefmt)},
+			End:     &calendar.EventDateTime{DateTime: mtgEnd.Format(calapitimefmt)},
+			Summary: subject,
+		}).SendNotifications(true).Do()
+		if err != nil {
+			log.Printf("error creating event: %s", err)
+			sendEmail("Error creating calendar event. Please try again.")
+			return
+		}
+
+		// event will have start time in their time zone
+		eventStart, err := time.Parse("2006-01-02T15:04:05-07:00", event.Start.DateTime)
+		if err != nil {
+			log.Printf("error parsing event start time: %s", err)
+			sendEmail("Created calendar event, but could not parse start time. Please report this error.")
+			return
+		}
+		sendEmail(fmt.Sprintf("I scheduled you to handle this email at %s.", eventStart.Format("Monday, January 2 3:04pm -0700")))
+	}
+
 	payloadDecoder := schema.NewDecoder() // cache this globally per gorilla doc recommendation
 	payloadDecoder.IgnoreUnknownKeys(true)
 	http.HandleFunc("/mailgun", func(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +416,7 @@ func main() {
 					ID:         bson.NewObjectId(),
 					Email:      payload.Sender,
 					Subject:    payload.Subject,
+					MessageID:  payload.MessageID,
 					Directions: directions,
 					Key:        uuid.New(),
 					Timestamp:  time.Now(),
@@ -203,7 +428,7 @@ func main() {
 					return
 				}
 				if id, mes, err := mg.Send(mailgun.NewMessage(
-					payload.Recipient,                      // from
+					sendandreceiveaddress,                  // from
 					fmt.Sprintf("Re: %s", payload.Subject), // subject
 					fmt.Sprintf("Thanks! Please verify this email address and connect it with Google "+
 						"Calendar to get started: https://%s/verifications/%s. This link will expire in 24 hours.", host, verification.Key),
@@ -224,8 +449,8 @@ func main() {
 			}
 		}
 
-		// pre-existing user: handle directiions
-		// TODO
+		// pre-existing user: handle directions
+		scheduleForLater(sendandreceiveaddress, user, payload.Subject, directions, payload.MessageID)
 
 		fmt.Fprintf(w, "hello mailgun")
 	})
@@ -256,6 +481,7 @@ func main() {
 		session.Values["email"] = verification.Email
 		session.Values["subject"] = verification.Subject
 		session.Values["directions"] = verification.Directions
+		session.Values["messageID"] = verification.MessageID
 		session.Values["googleOAuth2State"] = uuid.New()
 		if err := session.Save(r, w); err != nil {
 			log.Printf("error saving session: %s", err)
@@ -365,32 +591,6 @@ Please give us the earliest and latest time you'd like to schedule something.
     <option value="11:00pm">11:00pm</option>
     <option value="11:30pm">11:30pm</option>
   </select>
-  <select name="start-time-zone">
-    <option value="-1200">-1200</option>
-    <option value="-1100">-1100</option>
-    <option value="-1000">-1000</option>
-    <option value="-0900">-0900</option>
-    <option value="-0700" selected="selected">-0700</option>
-    <option value="-0600">-0600</option>
-    <option value="-0500">-0500</option>
-    <option value="-0400">-0400</option>
-    <option value="-0300">-0300</option>
-    <option value="-0200">-0200</option>
-    <option value="-0100">-0100</option>
-    <option value="+0000">+0000</option>
-    <option value="+0100">+0100</option>
-    <option value="+0200">+0200</option>
-    <option value="+0300">+0300</option>
-    <option value="+0400">+0400</option>
-    <option value="+0500">+0500</option>
-    <option value="+0600">+0600</option>
-    <option value="+0700">+0700</option>
-    <option value="+0800">+0800</option>
-    <option value="+0900">+0900</option>
-    <option value="+1000">+1000</option>
-    <option value="+1100">+1100</option>
-    <option value="+1200">+1200</option>
-  </select>
   <br/><br/>
   End time:
   <select name="end-time">
@@ -443,7 +643,9 @@ Please give us the earliest and latest time you'd like to schedule something.
     <option value="11:00pm">11:00pm</option>
     <option value="11:30pm">11:30pm</option>
   </select>
-  <select name="end-time-zone">
+  <br/><br/>
+  Time zone:
+  <select name="time-zone">
     <option value="-1200">-1200</option>
     <option value="-1100">-1100</option>
     <option value="-1000">-1000</option>
@@ -492,20 +694,19 @@ Please give us the earliest and latest time you'd like to schedule something.
 
 		// validate form data
 		startTime := r.FormValue("start-time")
-		startTimeZ := r.FormValue("start-time-zone")
 		endTime := r.FormValue("end-time")
-		endTimeZ := r.FormValue("end-time-zone")
-		if startTime == "" || startTimeZ == "" || endTime == "" || endTimeZ == "" {
+		timeZone := r.FormValue("time-zone")
+		if startTime == "" || endTime == "" || timeZone == "" {
 			fmt.Fprintf(w, "Invalid submission. Hit back and try again.")
 			return
 		}
-		start, err := time.Parse("3:00pm -0700", fmt.Sprintf("%s %s", startTime, startTimeZ))
+		start, err := time.Parse("3:00pm -0700", fmt.Sprintf("%s %s", startTime, timeZone))
 		if err != nil {
 			log.Printf("error parsing start time: %s", err)
 			http.Error(w, "Internal error. Please go back and try again.", http.StatusInternalServerError)
 			return
 		}
-		end, err := time.Parse("3:00pm -0700", fmt.Sprintf("%s %s", endTime, endTimeZ))
+		end, err := time.Parse("3:00pm -0700", fmt.Sprintf("%s %s", endTime, timeZone))
 		if err != nil {
 			log.Printf("error parsing end time: %s", err)
 			http.Error(w, "Internal error. Please go back and try again.", http.StatusInternalServerError)
@@ -560,7 +761,7 @@ Please give us the earliest and latest time you'd like to schedule something.
 		}
 
 		// process pending email that triggered setup process
-		// TODO
+		scheduleForLater(sendandreceiveaddress, user, session.Values["subject"].(string), session.Values["directions"].(string), session.Values["messageID"].(string))
 
 		fmt.Fprintf(w, "Thanks! You're all set.")
 	})

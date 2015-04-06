@@ -3,8 +3,29 @@
 	"GoVersion": "go1.4.2",
 	"Deps": [
 		{
+			"ImportPath": "code.google.com/p/go-uuid/uuid",
+			"Comment": "null-15",
+			"Rev": "35bc42037350f0078e3c974c6ea690f1926603ab"
+		},
+		{
+			"ImportPath": "github.com/gorilla/context",
+			"Rev": "215affda49addc4c8ef7e2534915df2c8c35c6cd"
+		},
+		{
 			"ImportPath": "github.com/gorilla/schema",
 			"Rev": "c8422571edf3131506bab7df27e18980fe2598d5"
+		},
+		{
+			"ImportPath": "github.com/gorilla/securecookie",
+			"Rev": "8e98dd730fc43f1383f19615db6f2e702c9738e8"
+		},
+		{
+			"ImportPath": "github.com/gorilla/sessions",
+			"Rev": "3e759b5c5532bec4f3934ea4c745e4ae5d69737a"
+		},
+		{
+			"ImportPath": "github.com/kidstuff/mongostore",
+			"Rev": "238d10551ec8da978f2ea7d6657ba1b47a828fdf"
 		},
 		{
 			"ImportPath": "github.com/mailgun/mailgun-go",
@@ -13,6 +34,11 @@
 		{
 			"ImportPath": "github.com/mbanzon/simplehttp",
 			"Rev": "6894781bc95b6a11c8b4e4a83eedb06c8a0b4536"
+		},
+		{
+			"ImportPath": "gopkg.in/mgo.v2",
+			"Comment": "r2015.01.24",
+			"Rev": "c6a7dce14133ccac2dcac3793f1d6e2ef048503a"
 		}
 	]
 }

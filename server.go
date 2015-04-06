@@ -20,6 +20,12 @@ import (
 	mailgun "github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/github.com/mailgun/mailgun-go"
 	"github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/gopkg.in/mgo.v2"
 	"github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/gopkg.in/mgo.v2/bson"
+
+	netcontext "github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/golang.org/x/net/context"
+	"github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/golang.org/x/oauth2"
+	"github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/golang.org/x/oauth2/google"
+	calendar "github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/google.golang.org/api/calendar/v3"
+	googlebasic "github.com/rgarcia/scheduleforlater.com/Godeps/_workspace/src/google.golang.org/api/oauth2/v2"
 )
 
 const MaxFormSize = 2 * 1024 * 1024
@@ -107,6 +113,16 @@ func main() {
 		log.Fatal("must set SESSION_KEY")
 	}
 
+	var googleClientID string
+	if googleClientID = os.Getenv("GOOGLE_CLIENT_ID"); googleClientID == "" {
+		log.Fatal("must set GOOGLE_CLIENT_ID")
+	}
+
+	var googleClientSecret string
+	if googleClientSecret = os.Getenv("GOOGLE_CLIENT_SECRET"); googleClientSecret == "" {
+		log.Fatal("must set GOOGLE_CLIENT_SECRET")
+	}
+
 	var mongourl string
 	if mongourl = os.Getenv("MONGO_URL"); mongourl == "" {
 		log.Fatal("must set MONGO_URL")
@@ -121,6 +137,17 @@ func main() {
 
 	sessionstore := mongostore.NewMongoStore(mgosession.DB("").C("sessions"), 3600, true, []byte(cookiesecret))
 	sessionstore.Options.Path = "/"
+
+	oauth2config := &oauth2.Config{
+		ClientID:     googleClientID,
+		ClientSecret: googleClientSecret,
+		Endpoint:     google.Endpoint,
+		RedirectURL:  fmt.Sprintf("https://%s/oauth2/google", host),
+		Scopes:       []string{calendar.CalendarScope, googlebasic.UserinfoEmailScope, googlebasic.UserinfoProfileScope},
+	}
+
+	// required for some stuff. don't 100% understand
+	ctx := netcontext.Background()
 
 	payloadDecoder := schema.NewDecoder() // cache this globally per gorilla doc recommendation
 	payloadDecoder.IgnoreUnknownKeys(true)
@@ -228,6 +255,7 @@ func main() {
 		session.Values["email"] = verification.Email
 		session.Values["subject"] = verification.Subject
 		session.Values["directions"] = verification.Directions
+		session.Values["googleOAuth2State"] = uuid.New()
 		if err := session.Save(r, w); err != nil {
 			log.Printf("error saving session: %s", err)
 			http.Error(w, "internal error saving session", http.StatusInternalServerError)
@@ -242,8 +270,46 @@ func main() {
 		}
 
 		// present google auth link
+		fmt.Fprintf(w, "<html><body>Thanks! Please connect this email (%s) with Google Calendar by clicking <a href='%s'>here</a>.</body></html>",
+			verification.Email, oauth2config.AuthCodeURL(session.Values["googleOAuth2State"].(string), oauth2.AccessTypeOffline))
+	})
+
+	http.HandleFunc("/oauth2/google", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.Header().Set("Allow", "GET")
+			http.Error(w, "only GET method is allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// redeem code for access/refresh token, store in session
+		session, _ := sessionstore.Get(r, sessionkey)
+		if r.FormValue("state") != session.Values["googleOAuth2State"] {
+			log.Printf("state mismatch")
+			http.Error(w, "state mismatch, please try again", http.StatusInternalServerError)
+			return
+		}
+		var code string
+		if code = r.FormValue("code"); code == "" {
+			log.Printf("no code: %#v", r)
+			http.Error(w, "no code, please try again", http.StatusBadRequest)
+			return
+		}
+		token, err := oauth2config.Exchange(ctx, code)
+		if err != nil {
+			log.Printf("error redeeming code for token: %s", err)
+			http.Error(w, "error getting token, please try again", http.StatusInternalServerError)
+			return
+		}
+		session.Values["access_token"] = token.AccessToken
+		session.Values["refresh_token"] = token.RefreshToken
+		if err := session.Save(r, w); err != nil {
+			log.Printf("error saving session: %s", err)
+			http.Error(w, "internal error saving session", http.StatusInternalServerError)
+			return
+		}
+
+		// ask user to set some stuff
 		// TODO
-		fmt.Fprintf(w, "thanks")
 	})
 
 	http.HandleFunc("/dumpsession", func(w http.ResponseWriter, r *http.Request) {

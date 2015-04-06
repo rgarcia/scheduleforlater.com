@@ -36,6 +36,34 @@
 			"Rev": "6894781bc95b6a11c8b4e4a83eedb06c8a0b4536"
 		},
 		{
+			"ImportPath": "golang.org/x/net/context",
+			"Rev": "6460565bec1e8891e29ff478184c71b9e443ac36"
+		},
+		{
+			"ImportPath": "golang.org/x/oauth2",
+			"Rev": "d2a4aec992687834e77c30ac9940622c987389e4"
+		},
+		{
+			"ImportPath": "google.golang.org/api/calendar/v3",
+			"Rev": "538bea96a868ee06164f134e414aa42ae2d98ac5"
+		},
+		{
+			"ImportPath": "google.golang.org/api/googleapi",
+			"Rev": "538bea96a868ee06164f134e414aa42ae2d98ac5"
+		},
+		{
+			"ImportPath": "google.golang.org/api/oauth2/v2",
+			"Rev": "538bea96a868ee06164f134e414aa42ae2d98ac5"
+		},
+		{
+			"ImportPath": "google.golang.org/cloud/compute/metadata",
+			"Rev": "f20d6dcccb44ed49de45ae3703312cb46e627db1"
+		},
+		{
+			"ImportPath": "google.golang.org/cloud/internal",
+			"Rev": "f20d6dcccb44ed49de45ae3703312cb46e627db1"
+		},
+		{
 			"ImportPath": "gopkg.in/mgo.v2",
 			"Comment": "r2015.01.24",
 			"Rev": "c6a7dce14133ccac2dcac3793f1d6e2ef048503a"

@@ -88,6 +88,56 @@ type interval struct {
 	End   time.Time
 }
 
+// Scorer assigns utility to a meeting slot.
+type Scorer interface {
+	Score(slot interval) float64
+}
+
+// UserPreferencesScorer scores a meeting slot based on whether it fits a user's preferences.
+type UserPreferencesScorer struct {
+	User User
+}
+
+// Score is -1000 if it falls outside of their work day, 0 if it fits.
+func (u UserPreferencesScorer) Score(slot interval) float64 {
+	// if this slot falls outside of user's preference for start/end time of the day, -1000 points
+	// Convert times to floats for easy comparison
+	userPrefStart := float64(u.User.Prefs.StartTime.Hour()) + float64(u.User.Prefs.StartTime.Minute())/60.0
+	userPrefEnd := float64(u.User.Prefs.EndTime.Hour()) + float64(u.User.Prefs.EndTime.Minute())/60.0
+	slotStart := float64(slot.Start.Hour()) + float64(slot.Start.Minute())/60.0
+	slotEnd := float64(slot.End.Hour()) + float64(slot.End.Minute())/60.0
+	if userPrefEnd > userPrefStart {
+		// userPrefs fall in the same UTC day
+		if slotStart < slotEnd {
+			// slot does not span
+			if (slotStart >= userPrefStart) && (slotEnd <= userPrefEnd) {
+				return 0.0
+			} else {
+				return -1000.0
+			}
+		} else {
+			// slot spans--impossible to fit preferences
+			return -1000.0
+		}
+	} else {
+		// userPrefs span a UTC day
+		if slotStart < slotEnd {
+			// slot does not span, simple case
+			if (userPrefStart <= slotStart) || (userPrefEnd >= slotEnd) {
+				return 0.0
+			} else {
+				return -1000.0
+			}
+		} else {
+			if (userPrefStart <= slotStart) && (userPrefEnd >= slotEnd) {
+				return 0.0
+			} else {
+				return -1000.0
+			}
+		}
+	}
+}
+
 type slotRank struct {
 	Slot  interval
 	Score float64
@@ -296,26 +346,6 @@ func main() {
 		// - contiguous with other meetings. If a slot's end time matches with the start of another meeting or a slot's start time matches with the end of another meeting, +1 pt.
 		// ... future other criteria
 		var slotRanks []slotRank
-		userPreferencesScore := func(slot interval) float64 {
-			// if this slot falls outside of user's preference for start/end time of the day, -1000 points
-			// this rests on the assumption that we collect a single timezone when getting user preferences, and that the start and end time are sequential
-			// this lets us put their preferences on a 24 hour range so that we can assume that the hours on user's preferred start/end are strictly increasing
-			userPrefStart := user.Prefs.StartTime.In(slot.Start.Location())
-			userPrefEnd := user.Prefs.EndTime.In(slot.Start.Location())
-			slotStartHour := slot.Start.Hour()
-			slotEndHour := slot.End.Hour()
-			if slotStartHour > slotEndHour {
-				slotEndHour += 24
-			}
-			if (slotStartHour < userPrefStart.Hour()) ||
-				(slotStartHour == userPrefStart.Hour() && slot.Start.Minute() < userPrefStart.Minute()) ||
-				(slotEndHour > userPrefEnd.Hour()) ||
-				(slotEndHour == userPrefEnd.Hour() && slot.End.Minute() > userPrefEnd.Minute()) {
-				return -1000.0
-			} else {
-				return 0.0
-			}
-		}
 		midpointScore := func(slot interval) float64 {
 			// theory: if you say "next 48 hours" your ideal time is 24 hours from now
 			// thus, give 0 points to things furthest from the midpoint, and 1 point to things closest
@@ -336,7 +366,7 @@ func main() {
 			return 0.0
 		}
 		for _, mtgSlot := range mtgSlots {
-			score := userPreferencesScore(mtgSlot) + midpointScore(mtgSlot) + contiguousScore(mtgSlot)
+			score := UserPreferencesScorer{User: user}.Score(mtgSlot) + midpointScore(mtgSlot) + contiguousScore(mtgSlot)
 			slotRanks = append(slotRanks, slotRank{Slot: mtgSlot, Score: score})
 		}
 		sort.Sort(sort.Reverse(byRank(slotRanks)))

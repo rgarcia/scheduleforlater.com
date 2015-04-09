@@ -108,22 +108,28 @@ func (u UserPreferencesScorer) Score(slot interval) float64 {
 	slotEnd := float64(slot.End.Hour()) + float64(slot.End.Minute())/60.0
 	if userPrefEnd > userPrefStart {
 		// userPrefs fall in the same UTC day
-		if (slotStart > userPrefStart) && (slotEnd < userPrefEnd) {
-			return 0.0
+		if slotStart < slotEnd {
+			// slot does not span
+			if (slotStart >= userPrefStart) && (slotEnd <= userPrefEnd) {
+				return 0.0
+			} else {
+				return -1000.0
+			}
 		} else {
+			// slot spans--impossible to fit preferences
 			return -1000.0
 		}
 	} else {
 		// userPrefs span a UTC day
 		if slotStart < slotEnd {
 			// slot does not span, simple case
-			if (userPrefStart < slotStart) || (userPrefEnd > slotEnd) {
+			if (userPrefStart <= slotStart) || (userPrefEnd >= slotEnd) {
 				return 0.0
 			} else {
 				return -1000.0
 			}
 		} else {
-			if (userPrefStart < slotStart) && (userPrefEnd < slotEnd) {
+			if (userPrefStart <= slotStart) && (userPrefEnd >= slotEnd) {
 				return 0.0
 			} else {
 				return -1000.0

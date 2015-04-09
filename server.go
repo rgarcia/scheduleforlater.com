@@ -298,22 +298,34 @@ func main() {
 		var slotRanks []slotRank
 		userPreferencesScore := func(slot interval) float64 {
 			// if this slot falls outside of user's preference for start/end time of the day, -1000 points
-			// this rests on the assumption that we collect a single timezone when getting user preferences, and that the start and end time are sequential
-			// this lets us put their preferences on a 24 hour range so that we can assume that the hours on user's preferred start/end are strictly increasing
-			userPrefStart := user.Prefs.StartTime.In(slot.Start.Location())
-			userPrefEnd := user.Prefs.EndTime.In(slot.Start.Location())
-			slotStartHour := slot.Start.Hour()
-			slotEndHour := slot.End.Hour()
-			if slotStartHour > slotEndHour {
-				slotEndHour += 24
-			}
-			if (slotStartHour < userPrefStart.Hour()) ||
-				(slotStartHour == userPrefStart.Hour() && slot.Start.Minute() < userPrefStart.Minute()) ||
-				(slotEndHour > userPrefEnd.Hour()) ||
-				(slotEndHour == userPrefEnd.Hour() && slot.End.Minute() > userPrefEnd.Minute()) {
-				return -1000.0
+			// Convert times to floats for easy comparison
+			userPrefStart := float64(user.Prefs.StartTime.Hour()) + float64(user.Prefs.StartTime.Minute())/60.0
+			userPrefEnd := float64(user.Prefs.EndTime.Hour()) + float64(user.Prefs.EndTime.Minute())/60.0
+			slotStart := float64(slot.Start.Hour()) + float64(slot.Start.Minute())/60.0
+			slotEnd := float64(slot.End.Hour()) + float64(slot.End.Minute())/60.0
+			if (userPrefEnd > userPrefStart) {
+				// userPrefs fall in the same UTC day
+				if ((slotStart > userPrefStart) && (slotEnd < userPrefEnd)){
+					return 0.0
+				} else {
+					return -1000.0
+				}
 			} else {
-				return 0.0
+			// userPrefs span a UTC day
+				if (slotStart < slotEnd){
+					// slot does not span, simple case
+					if ((userPrefStart < slotStart) || (userPrefEnd > slotEnd) {
+						return 0.0
+					} else {
+						return -1000.0
+					}
+				} else{
+					if ((userPrefStart < slotStart) && (userPrefEnd < slotEnd)) {
+						return 0.0
+					} else {
+						return -1000.0
+					}
+				}
 			}
 		}
 		midpointScore := func(slot interval) float64 {

@@ -680,6 +680,7 @@ Please give us the earliest and latest time you'd like to schedule something.
     <option value="-1100">-1100</option>
     <option value="-1000">-1000</option>
     <option value="-0900">-0900</option>
+    <option value="-0800">-0800</option>
     <option value="-0700" selected="selected">-0700</option>
     <option value="-0600">-0600</option>
     <option value="-0500">-0500</option>

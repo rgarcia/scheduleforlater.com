@@ -242,11 +242,12 @@ func main() {
 			}
 		}
 
+		usage := "[n] minutes next [n] [hours|days]"
+
 		// parse directions into number of minutes and interval within which to schedule
 		var timeRangeForMtg interval
 		var mtgDuration time.Duration
 		func() {
-			usage := "[n] minutes next [n] [hours|days]"
 			directionparts := strings.Split(directions, " ")
 			if len(directionparts) != 5 || directionparts[1] != "minutes" || directionparts[2] != "next" || !(directionparts[4] == "hours" || directionparts[4] == "days") {
 				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
@@ -287,6 +288,12 @@ func main() {
 				mtgSlotStart = mtgSlotStart.Add(mark)
 			}
 		}()
+
+		if len(mtgSlots) == 0 {
+			// time range is empty
+			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			return
+		}
 
 		// query for times when we're busy in the range
 		var busySlots []interval

@@ -101,11 +101,16 @@ type UserPreferencesScorer struct {
 // Score is -1000 if it falls outside of their work day, 0 if it fits.
 func (u UserPreferencesScorer) Score(slot interval) float64 {
 	// if this slot falls outside of user's preference for start/end time of the day, -1000 points
+	// since we'll be looking at the hours/minutes of a time, normalize time zones
+	location := u.User.Prefs.StartTime.Location()
+	norm := func(t time.Time) time.Time {
+		return t.In(location)
+	}
 	// Convert times to floats for easy comparison
-	userPrefStart := float64(u.User.Prefs.StartTime.Hour()) + float64(u.User.Prefs.StartTime.Minute())/60.0
-	userPrefEnd := float64(u.User.Prefs.EndTime.Hour()) + float64(u.User.Prefs.EndTime.Minute())/60.0
-	slotStart := float64(slot.Start.Hour()) + float64(slot.Start.Minute())/60.0
-	slotEnd := float64(slot.End.Hour()) + float64(slot.End.Minute())/60.0
+	userPrefStart := float64(norm(u.User.Prefs.StartTime).Hour()) + float64(norm(u.User.Prefs.StartTime).Minute())/60.0
+	userPrefEnd := float64(norm(u.User.Prefs.EndTime).Hour()) + float64(norm(u.User.Prefs.EndTime).Minute())/60.0
+	slotStart := float64(norm(slot.Start).Hour()) + float64(norm(slot.Start).Minute())/60.0
+	slotEnd := float64(norm(slot.End).Hour()) + float64(norm(slot.End).Minute())/60.0
 	if userPrefEnd > userPrefStart {
 		// userPrefs fall in the same UTC day
 		if slotStart < slotEnd {

@@ -46,6 +46,7 @@ func TestUserPreferencesScore(t *testing.T) {
 			},
 			Score: -1000.0,
 		},
+
 		// user preferences don't span a UTC day
 		// slot does span
 		UserPreferencesScoreTest{
@@ -106,6 +107,19 @@ func TestUserPreferencesScore(t *testing.T) {
 			Slot: interval{
 				Start: mustTimeParse(tfmt, "2015-04-08T23:45:00Z"),
 				End:   mustTimeParse(tfmt, "2015-04-08T00:30:00Z"),
+			},
+			Score: -1000.0,
+		},
+
+		// times sent to scorer do not have a uniform time zone
+		UserPreferencesScoreTest{
+			Pref: interval{
+				Start: mustTimeParse("2006-01-02T15:04:05 -0700", "0000-01-01T09:00:00 -0700"),
+				End:   mustTimeParse("2006-01-02T15:04:05 -0700", "0000-01-01T17:00:00 -0700"),
+			},
+			Slot: interval{
+				Start: mustTimeParse(tfmt, "2015-04-15T15:30:00Z"),
+				End:   mustTimeParse(tfmt, "2015-04-15T16:00:00Z"),
 			},
 			Score: -1000.0,
 		},

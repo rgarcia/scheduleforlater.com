@@ -242,25 +242,25 @@ func main() {
 			}
 		}
 
-		usage := "[n] minutes next [n] [hours|days]"
+		usage := "Directions should be contained in the first line of the body of the message and must be of the form '[n] minutes next [m] [hours|days]' where n and m are positive numbers without decimal parts."
 
 		// parse directions into number of minutes and interval within which to schedule
 		var timeRangeForMtg interval
 		var mtgDuration time.Duration
 		directionparts := strings.Split(directions, " ")
 		if len(directionparts) != 5 || directionparts[1] != "minutes" || directionparts[2] != "next" || !(directionparts[4] == "hours" || directionparts[4] == "days") {
-			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			sendEmail(fmt.Sprintf("Could not parse directions. %s", usage))
 			return
 		}
 		nminutes, err := strconv.Atoi(directionparts[0])
 		if err != nil {
-			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			sendEmail(fmt.Sprintf("Could not parse directions. %s", usage))
 			return
 		}
 		mtgDuration = time.Duration(nminutes) * time.Minute
 		nduration, err := strconv.Atoi(directionparts[3])
 		if err != nil {
-			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			sendEmail(fmt.Sprintf("Could not parse directions. %s", usage))
 			return
 		}
 		timeRangeForMtg.Start = time.Now()
@@ -287,7 +287,7 @@ func main() {
 
 		if len(mtgSlots) == 0 {
 			// time range is empty
-			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			sendEmail(fmt.Sprintf("Could not parse directions. %s", usage))
 			return
 		}
 

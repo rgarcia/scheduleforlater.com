@@ -229,7 +229,7 @@ func main() {
 	ctx := netcontext.Background()
 
 	scheduleForLater := func(from string, user User, subject string, directions string, messageID string) {
-		log.Printf("request received: from=%s directions=%s messageID=%s user=%#v", from, directions, messageID, user)
+		log.Printf("request received: from=%s directions=%s messageID=%s user.prefs.starttime=%s user.prefs.endtime=%s", from, directions, messageID, user.Prefs.StartTime, user.Prefs.EndTime)
 		sendEmail := func(text string) {
 			if id, mes, err := mg.Send(mailgun.NewMessage(
 				from, // from
@@ -370,10 +370,10 @@ func main() {
 			score := UserPreferencesScorer{User: user}.Score(mtgSlot) + midpointScore(mtgSlot) + contiguousScore(mtgSlot)
 			slotRanks = append(slotRanks, slotRank{Slot: mtgSlot, Score: score})
 		}
-		sort.Sort(sort.Reverse(byRank(slotRanks)))
 		for _, slotRank := range slotRanks {
 			log.Printf("slot: %s %s score: %f", slotRank.Slot.Start, slotRank.Slot.End, slotRank.Score)
 		}
+		sort.Sort(sort.Reverse(byRank(slotRanks)))
 
 		// schedule the mtg
 		log.Printf("top slot: %s %s score: %f", slotRanks[0].Slot.Start, slotRanks[0].Slot.End, slotRanks[0].Score)

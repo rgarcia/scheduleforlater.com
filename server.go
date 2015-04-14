@@ -247,47 +247,43 @@ func main() {
 		// parse directions into number of minutes and interval within which to schedule
 		var timeRangeForMtg interval
 		var mtgDuration time.Duration
-		func() {
-			directionparts := strings.Split(directions, " ")
-			if len(directionparts) != 5 || directionparts[1] != "minutes" || directionparts[2] != "next" || !(directionparts[4] == "hours" || directionparts[4] == "days") {
-				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
-				return
-			}
-			nminutes, err := strconv.Atoi(directionparts[0])
-			if err != nil {
-				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
-				return
-			}
-			mtgDuration = time.Duration(nminutes) * time.Minute
-			nduration, err := strconv.Atoi(directionparts[3])
-			if err != nil {
-				sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
-				return
-			}
-			timeRangeForMtg.Start = time.Now()
-			if directionparts[4] == "hours" {
-				timeRangeForMtg.End = timeRangeForMtg.Start.Add(time.Duration(nduration) * time.Hour)
-			} else if directionparts[4] == "days" {
-				timeRangeForMtg.End = timeRangeForMtg.Start.Add(time.Duration(nduration) * 24 * time.Hour)
-			}
-			log.Printf("making a meeting sometime between %s and %s", timeRangeForMtg.Start, timeRangeForMtg.End)
-		}()
+		directionparts := strings.Split(directions, " ")
+		if len(directionparts) != 5 || directionparts[1] != "minutes" || directionparts[2] != "next" || !(directionparts[4] == "hours" || directionparts[4] == "days") {
+			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			return
+		}
+		nminutes, err := strconv.Atoi(directionparts[0])
+		if err != nil {
+			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			return
+		}
+		mtgDuration = time.Duration(nminutes) * time.Minute
+		nduration, err := strconv.Atoi(directionparts[3])
+		if err != nil {
+			sendEmail(fmt.Sprintf("Could not parse directions. Directions must be of the form '%s'.", usage))
+			return
+		}
+		timeRangeForMtg.Start = time.Now()
+		if directionparts[4] == "hours" {
+			timeRangeForMtg.End = timeRangeForMtg.Start.Add(time.Duration(nduration) * time.Hour)
+		} else if directionparts[4] == "days" {
+			timeRangeForMtg.End = timeRangeForMtg.Start.Add(time.Duration(nduration) * 24 * time.Hour)
+		}
+		log.Printf("making a meeting sometime between %s and %s", timeRangeForMtg.Start, timeRangeForMtg.End)
 
 		// enumerate all potential meeting slots starting on 15 minute marks
 		mark := 15 * time.Minute
 		var mtgSlots []interval
-		func() {
-			mtgSlotStart := timeRangeForMtg.Start.Add(mark).Round(mark) // round up to next starting time
-			for {
-				mtgSlotEnd := mtgSlotStart.Add(mtgDuration)
-				if mtgSlotEnd.After(timeRangeForMtg.End) {
-					break
-				}
-				mtgSlots = append(mtgSlots, interval{Start: mtgSlotStart, End: mtgSlotEnd})
-				log.Print(mtgSlotStart, mtgSlotEnd)
-				mtgSlotStart = mtgSlotStart.Add(mark)
+		mtgSlotStart := timeRangeForMtg.Start.Add(mark).Round(mark) // round up to next starting time
+		for {
+			mtgSlotEnd := mtgSlotStart.Add(mtgDuration)
+			if mtgSlotEnd.After(timeRangeForMtg.End) {
+				break
 			}
-		}()
+			mtgSlots = append(mtgSlots, interval{Start: mtgSlotStart, End: mtgSlotEnd})
+			log.Print(mtgSlotStart, mtgSlotEnd)
+			mtgSlotStart = mtgSlotStart.Add(mark)
+		}
 
 		if len(mtgSlots) == 0 {
 			// time range is empty
@@ -309,41 +305,39 @@ func main() {
 			return
 		}
 		calapitimefmt := "2006-01-02T15:04:05-0700"
-		func() {
-			freebusy, err := calendar.NewFreebusyService(svc).Query(&calendar.FreeBusyRequest{
-				Items: []*calendar.FreeBusyRequestItem{
-					&calendar.FreeBusyRequestItem{Id: user.GCal.Email},
-				},
-				TimeMin: timeRangeForMtg.Start.Format(calapitimefmt),
-				TimeMax: timeRangeForMtg.End.Format(calapitimefmt),
-			}).Do()
-			if err != nil {
-				log.Printf("error getting free/busy from calendar: %s", err)
-				sendEmail("Error getting free/busy from calendar. Please try again.")
-				return
+		freebusy, err := calendar.NewFreebusyService(svc).Query(&calendar.FreeBusyRequest{
+			Items: []*calendar.FreeBusyRequestItem{
+				&calendar.FreeBusyRequestItem{Id: user.GCal.Email},
+			},
+			TimeMin: timeRangeForMtg.Start.Format(calapitimefmt),
+			TimeMax: timeRangeForMtg.End.Format(calapitimefmt),
+		}).Do()
+		if err != nil {
+			log.Printf("error getting free/busy from calendar: %s", err)
+			sendEmail("Error getting free/busy from calendar. Please try again.")
+			return
+		}
+		fbcalendar, ok := freebusy.Calendars[user.GCal.Email]
+		if !ok {
+			log.Printf("error: incorrectly assumed user had calendar named after email.")
+			sendEmail(fmt.Sprintf("Oh no! The service currently only works if you have a calendar named '%s' that we can query for open slots and add events to.", user.GCal.Email))
+			return
+		}
+		if len(fbcalendar.Errors) != 0 {
+			for _, err := range fbcalendar.Errors {
+				log.Printf("error: domain: %s reason: %s", err.Domain, err.Reason)
 			}
-			fbcalendar, ok := freebusy.Calendars[user.GCal.Email]
-			if !ok {
-				log.Printf("error: incorrectly assumed user had calendar named after email.")
-				sendEmail(fmt.Sprintf("Oh no! The service currently only works if you have a calendar named '%s' that we can query for open slots and add events to.", user.GCal.Email))
-				return
-			}
-			if len(fbcalendar.Errors) != 0 {
-				for _, err := range fbcalendar.Errors {
-					log.Printf("error: domain: %s reason: %s", err.Domain, err.Reason)
-				}
-				sendEmail("We ran into a problem retrieving free/busy data. Please try sending again.")
-				return
-			}
-			log.Printf("free busy %#v", freebusy)
-			for _, busy := range fbcalendar.Busy {
-				var i interval
-				i.Start, _ = time.Parse("2006-01-02T15:04:05Z", busy.Start)
-				i.End, _ = time.Parse("2006-01-02T15:04:05Z", busy.End)
-				busySlots = append(busySlots, i)
-				log.Printf("busy from %s to %s", i.Start, i.End)
-			}
-		}()
+			sendEmail("We ran into a problem retrieving free/busy data. Please try sending again.")
+			return
+		}
+		log.Printf("free busy %#v", freebusy)
+		for _, busy := range fbcalendar.Busy {
+			var i interval
+			i.Start, _ = time.Parse("2006-01-02T15:04:05Z", busy.Start)
+			i.End, _ = time.Parse("2006-01-02T15:04:05Z", busy.End)
+			busySlots = append(busySlots, i)
+			log.Printf("busy from %s to %s", i.Start, i.End)
+		}
 
 		// rank feasible blocks of time based on the following criteria:
 		// - not within user's preferences => -1000 points. In the future might be less of a penalty if close to preferences e.g. ok to have a mtg go a little bit past EOD

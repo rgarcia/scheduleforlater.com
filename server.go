@@ -229,6 +229,7 @@ func main() {
 	ctx := netcontext.Background()
 
 	scheduleForLater := func(from string, user User, subject string, directions string, messageID string) {
+		log.Printf("request received: from=%s directions=%s messageID=%s user=%#v", from, directions, messageID, user)
 		sendEmail := func(text string) {
 			if id, mes, err := mg.Send(mailgun.NewMessage(
 				from, // from
@@ -281,7 +282,6 @@ func main() {
 				break
 			}
 			mtgSlots = append(mtgSlots, interval{Start: mtgSlotStart, End: mtgSlotEnd})
-			log.Print(mtgSlotStart, mtgSlotEnd)
 			mtgSlotStart = mtgSlotStart.Add(mark)
 		}
 
@@ -376,6 +376,7 @@ func main() {
 		}
 
 		// schedule the mtg
+		log.Printf("top slot: %s %s score: %f", slotRanks[0].Slot.Start, slotRanks[0].Slot.End, slotRanks[0].Score)
 		mtgStart := slotRanks[0].Slot.Start
 		mtgEnd := slotRanks[0].Slot.End
 		event, err := calendar.NewEventsService(svc).Insert(user.GCal.Email, &calendar.Event{
